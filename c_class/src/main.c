@@ -182,16 +182,6 @@ void class_invoke_function(const Class* klass, size_t index)
 	fn(klass);
 }
 
-void memcpy(void* src, void* dest, size_t size)
-{
-	uint8_t* srcData = (uint8_t*)src;
-	uint8_t* destData = (uint8_t*)dest;
-
-	for (size_t i = 0; i < size; i++) {
-		destData[i] = srcData[i];
-	}
-}
-
 void class_add_member(Class* klass, Member* member)
 {
 	if (klass == NULL) {
@@ -342,14 +332,6 @@ void class_print_info(const Class* klass)
 	}
 }
 
-int strlen(const char* str)
-{
-	int pos = 0;
-	while (str[pos] != '\0')
-		pos++;
-	return pos;
-}
-
 void my_class_method(const Class* this) {
 	for (size_t i = 0; i < this->num_members; i++) {
 		Member* member = class_get_member(this, i);
@@ -364,13 +346,7 @@ void my_class_method(const Class* this) {
 
 int main(int argc, const char** argv)
 {
-	ClassCreateInfo createInfo = {
-		.name = "TestClass",
-		.members = NULL,
-		.num_members = 0,
-		.functions = NULL,
-		.num_functions = 0,
-	};
+	ClassCreateInfo createInfo = { .name = "TestClass" };
 
 	Class* klass = class_create(&createInfo);
 	if (klass == NULL)
@@ -382,6 +358,7 @@ int main(int argc, const char** argv)
 	function->fn = my_class_method;
 	function->name = STRINGIFY(my_class_method);
 	class_add_function(klass, function);
+	free(function);
 
 	class_print_info(klass);
 
