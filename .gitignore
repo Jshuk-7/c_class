@@ -1,0 +1,7 @@
+.vs
+c_class/x64
+x64
+
+*.vcxproj
+*.filters
+*.user
