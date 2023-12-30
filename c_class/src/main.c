@@ -3,6 +3,7 @@
 #include "stdlib.h"
 
 #define DEBUG_BREAK(msg) __debugbreak();
+#define STRINGIFY(s) #s
 
 typedef enum MemberType {
 	MEMBER_TYPE_F32,
@@ -47,7 +48,7 @@ MemberData member_get_data(const Member* member);
 const char* member_get_name(const Member* member)
 {
 	if (member == NULL) {
-		return "";
+		return NULL;
 	}
 
 	return member->name;
@@ -71,33 +72,68 @@ MemberData member_get_data(const Member* member)
 	return member->data;
 }
 
+typedef struct Class Class;
+
+typedef struct Function {
+	char* name;
+	void (*fn) (const Class*);
+} Function;
+
+const char* function_get_name(const Function* function);
+
+const char* function_get_name(const Function* function)
+{
+	if (function == NULL) {
+		return NULL;
+	}
+
+	return function->name;
+}
+
 typedef struct Class {
 	char* name;
 	Member* members;
 	size_t num_members;
+	Function* functions;
+	size_t num_functions;
 } Class;
 
-Class* class_new(const char* name, const Member* members, size_t num_members);
-void class_free(Class* klass);
+typedef struct ClassCreateInfo
+{
+	const char* name;
+	const Member* members;
+	size_t num_members;
+	const Function* functions;
+	size_t num_functions;
+} ClassCreateInfo;
+
+Class* class_create(const ClassCreateInfo* createInfo);
+void class_destroy(Class* klass);
 const char* class_get_name(const Class* klass);
+void class_invoke_function(const Class* klass, size_t index);
 void class_add_member(Class* klass, Member* member);
+void class_add_function(Class* klass, Function* function);
 Member* class_get_member(const Class* klass, size_t index);
+Function* class_get_function(const Class* klass, size_t index);
 size_t class_get_num_members(const Class* klass);
+size_t class_get_num_functions(const Class* klass);
 void class_print_info(const Class* klass);
 
-Class* class_new(const char* name, const Member* members, size_t num_members)
+Class* class_create(const ClassCreateInfo* createInfo)
 {
 	Class* klass = (Class*)malloc(sizeof(Class));
 	if (klass == NULL) {
 		return NULL;
 	}
-	klass->name = (char*)name;
-	klass->members = (Member*)members;
-	klass->num_members = num_members;
+	klass->name = (char*)createInfo->name;
+	klass->members = (Member*)createInfo->members;
+	klass->num_members = createInfo->num_members;
+	klass->functions = (Function*)createInfo->functions;
+	klass->num_functions = createInfo->num_functions;
 	return klass;
 }
 
-void class_free(Class* klass)
+void class_destroy(Class* klass)
 {
 	if (klass == NULL) {
 		DEBUG_BREAK("invalid class!");
@@ -108,6 +144,12 @@ void class_free(Class* klass)
 	if (num_members > 0) {
 		Member* members = klass->members;
 		free(members);
+	}
+
+	const size_t num_functions = class_get_num_functions(klass);
+	if (num_functions > 0) {
+		Function* functions = klass->functions;
+		free(functions);
 	}
 
 	free(klass);
@@ -122,20 +164,43 @@ const char* class_get_name(const Class* klass)
 	return klass->name;
 }
 
+void class_invoke_function(const Class* klass, size_t index)
+{
+	if (klass == NULL) {
+		DEBUG_BREAK("invalid class!");
+		return;
+	}
+
+	const size_t num_functions = class_get_num_functions(klass);
+	if (index > num_functions - 1) {
+		DEBUG_BREAK("index out of bounds!");
+		return;
+	}
+
+	const Function* function = class_get_function(klass, index);
+	const void (*fn) (const Class*) = function->fn;
+	fn(klass);
+}
+
 void memcpy(void* src, void* dest, size_t size)
 {
 	uint8_t* srcData = (uint8_t*)src;
-	uint8_t* dstData = (uint8_t*)dest;
+	uint8_t* destData = (uint8_t*)dest;
 
 	for (size_t i = 0; i < size; i++) {
-		dstData[i] = srcData[i];
+		destData[i] = srcData[i];
 	}
 }
 
 void class_add_member(Class* klass, Member* member)
 {
-	if (klass == NULL || member == NULL || klass->members == NULL) {
+	if (klass == NULL) {
 		DEBUG_BREAK("invalid class!");
+		return;
+	}
+
+	if (member == NULL) {
+		DEBUG_BREAK("invalid member!");
 		return;
 	}
 
@@ -153,6 +218,32 @@ void class_add_member(Class* klass, Member* member)
 	klass->members[klass->num_members - 1] = *member;
 }
 
+void class_add_function(Class* klass, Function* function)
+{
+	if (klass == NULL) {
+		DEBUG_BREAK("invalid class!");
+		return;
+	}
+
+	if (function == NULL) {
+		DEBUG_BREAK("invalid function!");
+		return;
+	}
+
+	const size_t element_size = sizeof(Function);
+	const size_t num_functions = class_get_num_functions(klass);
+	const size_t data_size = element_size * num_functions;
+
+	klass->functions = realloc(klass->functions, data_size + element_size);
+	if (klass->functions == NULL) {
+		return;
+	}
+
+	klass->num_functions++;
+
+	klass->functions[klass->num_functions - 1] = *function;
+}
+
 Member* class_get_member(const Class* klass, size_t index)
 {
 	if (klass == NULL) {
@@ -168,6 +259,21 @@ Member* class_get_member(const Class* klass, size_t index)
 	return NULL;
 }
 
+Function* class_get_function(const Class* klass, size_t index)
+{
+	if (klass == NULL) {
+		return NULL;
+	}
+
+	const size_t num_functions = class_get_num_functions(klass);
+	if (index < num_functions) {
+		return &klass->functions[index];
+	}
+
+	DEBUG_BREAK("index out of bounds!");
+	return NULL;
+}
+
 size_t class_get_num_members(const Class* klass)
 {
 	if (klass == NULL) {
@@ -177,6 +283,15 @@ size_t class_get_num_members(const Class* klass)
 	return klass->num_members;
 }
 
+size_t class_get_num_functions(const Class* klass)
+{
+	if (klass == NULL) {
+		return 0;
+	}
+
+	return klass->num_functions;
+}
+
 void class_print_info(const Class* klass)
 {
 	if (klass == NULL) {
@@ -184,13 +299,16 @@ void class_print_info(const Class* klass)
 	}
 
 	const char* class_name = class_get_name(klass);
-	printf("Class: %s\n", class_name);
-	printf("Members: %zu\n", klass->num_members);
-
 	const size_t num_members = class_get_num_members(klass);
-	if (num_members == 0) {
-		return;
-	}
+	const size_t num_functions = class_get_num_functions(klass);
+
+	printf("Class: %s\n", class_name);
+	printf("Members: %zu\n", num_members);
+	printf("Functions: %zu\n", num_functions);
+	
+	putchar('\n');
+
+	printf("Methods:\n");
 
 	for (size_t i = 0; i < num_members; i++) {
 		const Member* member = class_get_member(klass, i);
@@ -211,6 +329,17 @@ void class_print_info(const Class* klass)
 		}
 		putchar('\n');
 	}
+
+	putchar('\n');
+
+	printf("Functions:\n");
+
+	for (size_t i = 0; i < num_functions; i++) {
+		const Function* function = class_get_function(klass, i);
+		const char* name = function_get_name(function);
+		printf("%zu.", i + 1);
+		printf("\tName: %s\n", name);
+	}
 }
 
 int strlen(const char* str)
@@ -221,41 +350,44 @@ int strlen(const char* str)
 	return pos;
 }
 
+void my_class_method(const Class* this) {
+	for (size_t i = 0; i < this->num_members; i++) {
+		Member* member = class_get_member(this, i);
+		printf("%s\n", member_get_name(member));
+	}
+
+	for (size_t i = 0; i < this->num_functions; i++) {
+		Function* function = class_get_function(this, i);
+		printf("%s\n", function_get_name(function));
+	}
+}
+
 int main(int argc, const char** argv)
 {
-	const size_t num_members = 1;
-	Member* members = (Member*)malloc(sizeof(Member) * num_members);
-	if (members == NULL)
-		return;
+	ClassCreateInfo createInfo = {
+		.name = "TestClass",
+		.members = NULL,
+		.num_members = 0,
+		.functions = NULL,
+		.num_functions = 0,
+	};
 
-	Member* member = &members[0];
-	member->name = "MyFloat";
-	member->type = MEMBER_TYPE_F32;
-	member->data.f_data = 1.0f;
-
-	Class* klass = class_new("MyClass", members, num_members);
+	Class* klass = class_create(&createInfo);
 	if (klass == NULL)
 		return;
 
-	member = (Member*)malloc(sizeof(Member));
-	if (member == NULL)
+	Function* function = (Function*)malloc(sizeof(Function));
+	if (function == NULL)
 		return;
-	member->name = "MyDouble";
-	member->type = MEMBER_TYPE_F64;
-	member->data.d_data = 2.3;
-	class_add_member(klass, member);
-
-	member = (Member*)malloc(sizeof(Member));
-	if (member == NULL)
-		return;
-	member->name = "MyInt";
-	member->type = MEMBER_TYPE_I32;
-	member->data.i_data = 3;
-	class_add_member(klass, member);
+	function->fn = my_class_method;
+	function->name = STRINGIFY(my_class_method);
+	class_add_function(klass, function);
 
 	class_print_info(klass);
 
-	class_free(klass);
+	class_invoke_function(klass, 0);
+
+	class_destroy(klass);
 
 	int _ = getchar();
 }
