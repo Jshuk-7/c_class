@@ -509,17 +509,8 @@ void class_debug_print(const Class* klass)
 	}
 }
 
-void test_class_ctor(const Class* this) {
-	const char* class_name = class_get_name(this);
-	printf("%s::ctor()\n", class_name);
-}
-
 void test_class_test(void) {
-	Function ctor;
-	ctor.fn = test_class_ctor;
-	ctor.name = STRINGIFY(test_class_ctor);
-
-	ClassCreateInfo createInfo = { .name = "TestClass", .ctor = &ctor };
+	ClassCreateInfo createInfo = { .name = "TestClass" };
 	Class* klass = class_create(&createInfo);
 	if (klass == NULL)
 		return;
@@ -602,9 +593,8 @@ void test_vec2_class(void) {
 	}
 }
 
-int main(int argc, const char** argv)
-{
-	test_vec2_class();
+int main(int argc, char** argv) {
+	test_class_test();
 
-	int _ = getchar();
+	return getchar();
 }
