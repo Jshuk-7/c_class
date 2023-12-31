@@ -5,7 +5,7 @@
 #define DEBUG_BREAK(msg) __debugbreak();
 #define STRINGIFY(s) #s
 
-typedef enum {
+typedef enum MemberType {
 	MEMBER_TYPE_F32,
 	MEMBER_TYPE_F64,
 	MEMBER_TYPE_I32,
@@ -27,14 +27,14 @@ const char* member_type_to_string(MemberType type)
 	return "";
 }
 
-typedef union {
+typedef union MemberData {
 	float f_data;
 	double d_data;
 	int32_t i_data;
 	uint32_t u_data;
 } MemberData;
 
-typedef struct {
+typedef struct Member {
 	MemberData data;
 	char* name;
 	MemberType type;
@@ -73,20 +73,22 @@ MemberData member_get_data(const Member* member)
 
 typedef struct Class Class;
 
-typedef enum {
+typedef enum FunctionType {
 	FUNCTION_TYPE_CONSTRUCTOR,
-	FUNCTION_TYPE_CLASS_METHOD,
+	FUNCTION_TYPE_DESTRUCTOR,
+	FUNCTION_TYPE_MEMBER_FUNCTION,
 } FunctionType;
 
-typedef struct {
+typedef struct Function {
 	char* name;
 	FunctionType type;
 	void (*fn) (const Class*);
+	Class* (*binary_member_fn) (const Class*, const Class*);
 } Function;
 
 const char* function_get_name(const Function* function);
 FunctionType function_get_type(const Function* function);
-void function_invoke(const Function* function, const Class* klass);
+Class* function_invoke(const Function* function, const Class* klass, const Class* other);
 
 const char* function_get_name(const Function* function)
 {
@@ -100,30 +102,42 @@ const char* function_get_name(const Function* function)
 FunctionType function_get_type(const Function* function)
 {
 	if (function == NULL) {
-		return FUNCTION_TYPE_CLASS_METHOD;
+		return FUNCTION_TYPE_MEMBER_FUNCTION;
 	}
 
 	return function->type;
 }
 
-void function_invoke(const Function* function, const Class* klass)
+Class* function_invoke(const Function* function, const Class* klass, const Class* other)
 {
 	if (function == NULL || klass == NULL) {
 		DEBUG_BREAK("invalid function!");
-		return;
+		return NULL;
 	}
 
-	switch (function_get_type(function)) {
-		case FUNCTION_TYPE_CONSTRUCTOR: function->fn(klass); return;
-		case FUNCTION_TYPE_CLASS_METHOD: function->fn(klass); return;
+	const FunctionType type = function_get_type(function);
+
+	switch (type) {
+		case FUNCTION_TYPE_CONSTRUCTOR: function->fn(klass); return NULL;
+		case FUNCTION_TYPE_DESTRUCTOR: function->fn(klass); return NULL;
+		case FUNCTION_TYPE_MEMBER_FUNCTION: {
+			if (other == NULL) {
+				function->fn(klass);
+				return NULL;
+			} else {
+				return function->binary_member_fn(klass, other);
+			}
+		}
 	}
 
 	DEBUG_BREAK("unknown function type!");
+	return NULL;
 }
 
 typedef struct Class {
 	char* name;
 	Function* ctor;
+	Function* dtor;
 	Member* members;
 	size_t num_members;
 	Function* functions;
@@ -133,6 +147,7 @@ typedef struct Class {
 typedef struct ClassCreateInfo {
 	const char* name;
 	Function* ctor;
+	Function* dtor;
 	const Member* members;
 	size_t num_members;
 	const Function* functions;
@@ -143,8 +158,10 @@ Class* class_create(const ClassCreateInfo* createInfo);
 void class_destroy(Class* klass);
 const char* class_get_name(const Class* klass);
 int class_has_constructor(const Class* klass);
+int class_has_destructor(const Class* klass);
 Function* class_get_constructor(const Class* klass);
-void class_invoke_function(const Class* klass, size_t index);
+Function* class_get_destructor(const Class* klass);
+Class* class_invoke_function(const Class* klass, const Class* other, size_t index);
 void class_add_member(Class* klass, Member* member);
 void class_add_function(Class* klass, Function* function);
 Member* class_get_member(const Class* klass, size_t index);
@@ -161,15 +178,61 @@ Class* class_create(const ClassCreateInfo* createInfo)
 	}
 
 	klass->name = (char*)createInfo->name;
-	klass->ctor = createInfo->ctor;
-	klass->members = (Member*)createInfo->members;
+
+	if (createInfo->ctor != NULL) {
+		klass->ctor = (Function*)malloc(sizeof(Function));
+		if (klass->ctor == NULL) {
+			return NULL;
+		}
+		klass->ctor->fn = createInfo->ctor->fn;
+		klass->ctor->name = createInfo->ctor->name;
+	} else {
+		klass->ctor = NULL;
+	}
+
+	if (createInfo->dtor != NULL) {
+		klass->dtor = (Function*)malloc(sizeof(Function));
+		if (klass->dtor == NULL) {
+			return NULL;
+		}
+		klass->dtor->fn = createInfo->dtor->fn;
+		klass->dtor->name = createInfo->dtor->name;
+	} else {
+		klass->dtor = NULL;
+	}
+
+	klass->members = (Member*)malloc(sizeof(Member) * createInfo->num_members);
+	if (klass->members == NULL) {
+		return NULL;
+	}
+
 	klass->num_members = createInfo->num_members;
-	klass->functions = (Function*)createInfo->functions;
+	for (size_t i = 0; i < klass->num_members; i++) {
+		Member* member = &klass->members[i];
+		const Member* other = &createInfo->members[i];
+		member->name = other->name;
+		member->type = other->type;
+		member->data = other->data;
+	}
+
+	klass->functions = (Function*)malloc(sizeof(Function) * createInfo->num_functions);
+	if (klass->functions == NULL) {
+		return NULL;
+	}
+
 	klass->num_functions = createInfo->num_functions;
+	for (size_t i = 0; i < klass->num_functions; i++) {
+		Function* function = &klass->functions[i];
+		const Function* other = &createInfo->functions[i];
+		function->fn = other->fn;
+		function->binary_member_fn = other->binary_member_fn;
+		function->name = other->name;
+		function->type = other->type;
+	}
 
 	if (class_has_constructor(klass) == 1) {
 		klass->ctor->type = FUNCTION_TYPE_CONSTRUCTOR;
-		function_invoke(klass->ctor, klass);
+		function_invoke(klass->ctor, klass, NULL);
 	}
 
 	return klass;
@@ -182,6 +245,16 @@ void class_destroy(Class* klass)
 		return;
 	}
 
+	if (class_has_constructor(klass) == 1) {
+		free(klass->ctor);
+	}
+
+	if (class_has_destructor(klass) == 1) {
+		klass->dtor->type = FUNCTION_TYPE_DESTRUCTOR;
+		function_invoke(klass->dtor, klass, NULL);
+		free(klass->dtor);
+	}
+
 	const size_t num_members = class_get_num_members(klass);
 	if (num_members > 0) {
 		Member* members = klass->members;
@@ -192,10 +265,6 @@ void class_destroy(Class* klass)
 	if (num_functions > 0) {
 		Function* functions = klass->functions;
 		free(functions);
-	}
-
-	if (class_has_constructor(klass) == 1) {
-		free(klass->ctor);
 	}
 
 	free(klass);
@@ -219,6 +288,15 @@ int class_has_constructor(const Class* klass)
 	return klass->ctor != NULL;
 }
 
+int class_has_destructor(const Class* klass)
+{
+	if (klass == NULL) {
+		return 0;
+	}
+
+	return klass->dtor != NULL;
+}
+
 Function* class_get_constructor(const Class* klass)
 {
 	if (klass == NULL) {
@@ -228,21 +306,30 @@ Function* class_get_constructor(const Class* klass)
 	return klass->ctor;
 }
 
-void class_invoke_function(const Class* klass, size_t index)
+Function* class_get_destructor(const Class* klass)
+{
+	if (klass == NULL) {
+		return NULL;
+	}
+
+	return klass->dtor;
+}
+
+Class* class_invoke_function(const Class* klass, const Class* other, size_t index)
 {
 	if (klass == NULL) {
 		DEBUG_BREAK("invalid class!");
-		return;
+		return NULL;
 	}
 
 	const size_t num_functions = class_get_num_functions(klass);
 	if (index > num_functions - 1) {
 		DEBUG_BREAK("index out of bounds!");
-		return;
+		return NULL;
 	}
 
 	const Function* function = class_get_function(klass, index);
-	function_invoke(function, klass);
+	return function_invoke(function, klass, other);
 }
 
 void class_add_member(Class* klass, Member* member)
@@ -356,8 +443,8 @@ void class_debug_print(const Class* klass)
 	const size_t num_functions = class_get_num_functions(klass);
 
 	printf("Class: %s\n", class_name);
-	printf("Members: %zu\n", num_members);
-	printf("Functions: %zu\n", num_functions);
+	printf("Data Members: %zu\n", num_members);
+	printf("Member Functions: %zu\n", num_functions);
 
 	printf("Ctor: ");
 	if (class_has_constructor(klass) == 1) {
@@ -368,15 +455,23 @@ void class_debug_print(const Class* klass)
 		printf("(null)");
 	}
 	putchar('\n');
+
+	printf("Dtor: ");
+	if (class_has_destructor(klass) == 1) {
+		const Function* dtor = class_get_destructor(klass);
+		const char* dtor_name = function_get_name(dtor);
+		printf("%s", dtor_name);
+	} else {
+		printf("(null)");
+	}
+	putchar('\n');
 	
 	putchar('\n');
 
-	printf("Methods: ");
-
+	printf("Data Members: ");
 	if (num_members == 0) {
 		printf("(null)");
 	}
-
 	putchar('\n');
 
 	for (size_t i = 0; i < num_members; i++) {
@@ -400,12 +495,10 @@ void class_debug_print(const Class* klass)
 
 	putchar('\n');
 
-	printf("Functions: ");
-
+	printf("Member Functions: ");
 	if (num_functions == 0) {
 		printf("(null)");
 	}
-
 	putchar('\n');
 
 	for (size_t i = 0; i < num_functions; i++) {
@@ -422,20 +515,16 @@ void test_class_ctor(const Class* this) {
 }
 
 void test_class_test(void) {
-	Function* ctor = (Function*)malloc(sizeof(Function));
-	if (ctor == NULL)
-		return;
-	ctor->fn = test_class_ctor;
-	ctor->name = STRINGIFY(test_class_ctor);
+	Function ctor;
+	ctor.fn = test_class_ctor;
+	ctor.name = STRINGIFY(test_class_ctor);
 
-	ClassCreateInfo createInfo = { .name = "TestClass", .ctor = ctor };
-
+	ClassCreateInfo createInfo = { .name = "TestClass", .ctor = &ctor };
 	Class* klass = class_create(&createInfo);
 	if (klass == NULL)
 		return;
-
+	
 	class_debug_print(klass);
-
 	class_destroy(klass);
 }
 
@@ -443,35 +532,47 @@ void vec2_ctor(const Class* this) {
 	
 }
 
+void vec2_dtor(const Class* this) {
+	
+}
+
+Class* vec2_add(const Class* lhs, const Class* rhs);
+
 Class* create_vec2(float x, float y) {
-	Function* ctor = (Function*)malloc(sizeof(Function));
-	if (ctor == NULL)
-		return NULL;
-	ctor->fn = vec2_ctor;
-	ctor->name = STRINGIFY(vec2_ctor);
+	Function ctor;
+	ctor.fn = vec2_ctor;
+	ctor.name = STRINGIFY(vec2_ctor);
 
-	const size_t num_members = 2;
-	Member* members = (Member*)malloc(sizeof(Member) * num_members);
-	if (members == NULL)
-		return NULL;
+	Function dtor;
+	dtor.fn = vec2_dtor;
+	dtor.name = STRINGIFY(vec2_dtor);
 
+	Member x_member, y_member;
+	x_member.name = "x";
+	x_member.data.f_data = x;
+	y_member.name = "y";
+	y_member.data.f_data = y;
+	Member members[] = { x_member, y_member };
+
+	const size_t num_members = sizeof(members) / sizeof(members[0]);
 	for (size_t i = 0; i < num_members; i++) {
 		Member* member = &members[i];
 		member->type = MEMBER_TYPE_F32;
 	}
 
-	Member* member = &members[0];
-	member->name = "x";
-	member->data.f_data = x;
-	member = &members[1];
-	member->name = "y";
-	member->data.f_data = y;
+	Function add_fn;
+	add_fn.type = FUNCTION_TYPE_MEMBER_FUNCTION;
+	add_fn.binary_member_fn = vec2_add;
+	add_fn.name = STRINGIFY(vec2_add);
 
 	ClassCreateInfo createInfo = {
 		.name = "Vec2",
-		.ctor = ctor,
+		.ctor = &ctor,
+		.dtor = &dtor,
 		.members = members,
-		.num_members = num_members
+		.num_members = num_members,
+		.functions = &add_fn,
+		.num_functions = 1
 	};
 
 	Class* klass = class_create(&createInfo);
@@ -481,10 +582,24 @@ Class* create_vec2(float x, float y) {
 	return klass;
 }
 
+Class* vec2_add(const Class* lhs, const Class* rhs) {
+	Class* result = create_vec2(0, 0);
+	result->members[0].data.f_data = lhs->members[0].data.f_data + rhs->members[0].data.f_data;
+	result->members[1].data.f_data = lhs->members[1].data.f_data + rhs->members[1].data.f_data;
+	return result;
+}
+
 void test_vec2_class(void) {
 	Class* a = create_vec2(1, 3);
-	class_debug_print(a);
-	class_destroy(a);
+	Class* b = create_vec2(2, 4);
+	Class* c = class_invoke_function(a, b, 0);
+	class_debug_print(c);
+	Class* classes[] = { a, b, c };
+	const size_t num_classes = sizeof(classes) / sizeof(classes[0]);
+	for (size_t i = 0; i < num_classes; i++) {
+		Class* klass = classes[i];
+		class_destroy(klass);
+	}
 }
 
 int main(int argc, const char** argv)
